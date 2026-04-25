@@ -29,11 +29,12 @@ service cloud.firestore {
         && data.keys().hasAll(['uid', 'name', 'phone', 'role', 'createdAt'])
         && (!('loyaltyPoints' in data) || data.loyaltyPoints is number)
         && (!('loyaltyTier' in data) || (data.loyaltyTier is string && data.loyaltyTier.size() <= 50))
-        && (!('isSubscribed' in data) || data.isSubscribed is bool);
+        && (!('isSubscribed' in data) || data.isSubscribed is bool)
+        && (!('walletBalance' in data) || data.walletBalance is number);
     }
 
     function isValidDriver(data) {
-      return data.uid == request.auth.uid
+       return data.uid == request.auth.uid
         && data.truckCapacity is number && data.truckCapacity > 0
         && data.waterSource is string && data.waterSource.size() <= 200
         && data.isAvailable is bool
@@ -41,7 +42,8 @@ service cloud.firestore {
         && data.keys().hasAll(['uid', 'truckCapacity', 'waterSource', 'isAvailable', 'location', 'updatedAt'])
         && (!('waterQualityStatus' in data) || (data.waterQualityStatus is string && data.waterQualityStatus.size() <= 200))
         && (!('rating' in data) || data.rating is number)
-        && (!('ratingCount' in data) || data.ratingCount is number);
+        && (!('ratingCount' in data) || data.ratingCount is number)
+        && (!('completedOrdersCount' in data) || data.completedOrdersCount is number);
     }
 
     function isValidOrder(data) {
@@ -49,7 +51,12 @@ service cloud.firestore {
         && data.status == 'pending'
         && data.createdAt == request.time
         && data.locationDescription is string && data.locationDescription.size() <= 1000
-        && data.keys().hasAll(['orderId', 'consumerId', 'status', 'createdAt', 'locationDescription']);
+        && data.keys().hasAll(['orderId', 'consumerId', 'status', 'createdAt', 'locationDescription'])
+        && (!('capacity' in data) || data.capacity is number)
+        && (!('paymentMethod' in data) || (data.paymentMethod is string && data.paymentMethod in ['cash', 'wallet']))
+        && (!('scheduledAt' in data) || data.scheduledAt is string)
+        && (!('isRecurring' in data) || data.isRecurring is bool)
+        && (!('recurringInterval' in data) || data.recurringInterval is string);
     }
 
     function isValidMessage(data) {
@@ -61,13 +68,14 @@ service cloud.firestore {
     }
 
     function isValidRating(data) {
-      return data.consumerId == request.auth.uid 
+      return (data.consumerId == request.auth.uid || data.driverId == request.auth.uid)
+        && data.consumerId is string && data.consumerId.size() > 0
         && data.driverId is string && data.driverId.size() > 0
         && data.orderId is string && data.orderId.size() > 0
         && data.rating is number && data.rating >= 1 && data.rating <= 5
-        && data.transcript is string && data.transcript.size() <= 2000
+        && (!('transcript' in data) || (data.transcript is string && data.transcript.size() <= 2000))
         && data.createdAt == request.time
-        && data.keys().hasAll(['ratingId', 'consumerId', 'driverId', 'orderId', 'rating', 'transcript', 'createdAt']);
+        && data.keys().hasAll(['ratingId', 'consumerId', 'driverId', 'orderId', 'rating', 'createdAt']);
     }
 
     match /users/{userId} {
@@ -96,9 +104,12 @@ service cloud.firestore {
       allow update: if isSignedIn() && (
         (resource.data.consumerId == request.auth.uid && incoming().status == 'cancelled' && existing().status == 'pending' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])) ||
         (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'driver' && existing().status == 'pending' && (!('driverId' in existing()) || existing().driverId == null) && incoming().status == 'accepted' && incoming().driverId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'driverId', 'updatedAt'])) ||
-        (resource.data.driverId == request.auth.uid && incoming().status == 'delivering' && existing().status == 'accepted' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])) ||
-        (resource.data.driverId == request.auth.uid && incoming().status == 'completed' && existing().status == 'delivering' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])) ||
-        (resource.data.consumerId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['hasRated']) && incoming().hasRated == true)
+        (resource.data.driverId == request.auth.uid && incoming().status == 'en_route_pickup' && existing().status == 'accepted' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])) ||
+        (resource.data.driverId == request.auth.uid && incoming().status == 'loading_water' && existing().status == 'en_route_pickup' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])) ||
+        (resource.data.driverId == request.auth.uid && incoming().status == 'delivering' && (existing().status == 'accepted' || existing().status == 'loading_water') && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])) ||
+        (resource.data.driverId == request.auth.uid && incoming().status == 'completed' && existing().status == 'delivering' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt', 'paymentStatus'])) ||
+        (resource.data.consumerId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['hasRated']) && incoming().hasRated == true) ||
+        (resource.data.driverId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['hasDriverRated']) && incoming().hasDriverRated == true)
       );
 
       match /messages/{messageId} {

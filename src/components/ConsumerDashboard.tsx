@@ -3,7 +3,7 @@ import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, orderBy, getDoc } from 'firebase/firestore';
 import { User } from 'firebase/auth';
 import { motion, AnimatePresence } from 'motion/react';
-import { Mic, Square, Loader2, MapPin, CheckCircle2, Clock, XCircle, Droplets, Star, Shield, MessageSquare, Award, Bell } from 'lucide-react';
+import { Mic, Square, Loader2, MapPin, CheckCircle2, Clock, XCircle, Droplets, Star, Shield, MessageSquare, Award, Bell, Wallet, Calendar, Navigation } from 'lucide-react';
 import { processVoiceOrder } from '../services/geminiService';
 import Chat from './Chat';
 
@@ -14,6 +14,7 @@ interface ConsumerDashboardProps {
 
 export default function ConsumerDashboard({ user, profile }: ConsumerDashboardProps) {
   const [orders, setOrders] = useState<any[]>([]);
+  const [onlineDrivers, setOnlineDrivers] = useState<any[]>([]);
   const [isRecording, setIsRecording] = useState(false);
   const [loading, setLoading] = useState(false);
   const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
@@ -21,6 +22,10 @@ export default function ConsumerDashboard({ user, profile }: ConsumerDashboardPr
   const [error, setError] = useState<string | null>(null);
   const [driverInfo, setDriverInfo] = useState<any>(null);
   const [showChat, setShowChat] = useState(false);
+  
+  const [pendingVoiceOrder, setPendingVoiceOrder] = useState<any>(null);
+  const [notification, setNotification] = useState<string | null>(null);
+  const prevStatusRef = useRef<string | undefined>(undefined);
   
   // Rating State
   const [isRating, setIsRating] = useState({ orderId: '', driverId: '' });
@@ -46,8 +51,28 @@ export default function ConsumerDashboard({ user, profile }: ConsumerDashboardPr
     return unsubscribe;
   }, [user.uid]);
 
-  const activeOrder = orders.find(o => ['pending', 'accepted', 'delivering'].includes(o.status));
+  useEffect(() => {
+    const qDrivers = query(collection(db, 'drivers'), where('isAvailable', '==', true));
+    const unsub = onSnapshot(qDrivers, (snapshot) => {
+      setOnlineDrivers(snapshot.docs.map(d => d.data()));
+    }, (err) => handleFirestoreError(err, OperationType.LIST, 'drivers'));
+    return unsub;
+  }, []);
+
+  const activeOrder = orders.find(o => ['pending', 'accepted', 'en_route_pickup', 'loading_water', 'delivering'].includes(o.status));
   const needsRating = orders.find(o => o.status === 'completed' && !o.hasRated); // assuming we track hasRated locally or in doc
+
+  useEffect(() => {
+    if (activeOrder && activeOrder.status !== prevStatusRef.current) {
+      if (prevStatusRef.current !== undefined) {
+         setNotification(`إشعار جديد: ${renderStatus(activeOrder.status)}`);
+         setTimeout(() => setNotification(null), 5000);
+      }
+      prevStatusRef.current = activeOrder.status;
+    } else if (!activeOrder && prevStatusRef.current && prevStatusRef.current !== 'completed' && prevStatusRef.current !== 'cancelled') {
+         // order was completed/cancelled and removed from active
+    }
+  }, [activeOrder?.status]);
 
   useEffect(() => {
     if (activeOrder?.driverId && activeOrder.status !== 'pending') {
@@ -110,22 +135,42 @@ export default function ConsumerDashboard({ user, profile }: ConsumerDashboardPr
         const base64Audio = (reader.result as string).split(',')[1];
         const aiResult = await processVoiceOrder(base64Audio);
         
-        const orderData = {
-          consumerId: user.uid,
-          status: 'pending',
-          capacity: aiResult.capacity || 3000,
-          locationDescription: aiResult.locationDescription || 'تم الطلب عبر رسالة صوتية',
-          transcript: aiResult.transcript,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-          orderId: `W-${Math.random().toString(36).substring(7).toUpperCase()}`
-        };
-
-        await addDoc(collection(db, 'orders'), orderData);
+         setPendingVoiceOrder({
+          ...aiResult,
+          capacity: aiResult.capacity ? parseInt(aiResult.capacity) : 3000,
+          paymentMethod: 'cash',
+          scheduledAt: '',
+          isRecurring: false
+        });
         setLoading(false);
       };
     } catch (err) {
       setError("عذراً، حدث خطأ أثناء معالجة الطلب. حاول مرة أخرى.");
+      setLoading(false);
+    }
+  };
+
+  const submitOrder = async () => {
+    if (!pendingVoiceOrder) return;
+    setLoading(true);
+    try {
+      const orderData = {
+        orderId: `O-${Date.now()}`,
+        consumerId: user.uid,
+        status: 'pending',
+        locationDescription: pendingVoiceOrder.locationDescription || "موقع غير محدد",
+        capacity: pendingVoiceOrder.capacity ? parseInt(pendingVoiceOrder.capacity) : 3000,
+        createdAt: serverTimestamp(),
+        paymentMethod: pendingVoiceOrder.paymentMethod,
+        ...(pendingVoiceOrder.scheduledAt && { scheduledAt: pendingVoiceOrder.scheduledAt }),
+        ...(pendingVoiceOrder.isRecurring && { isRecurring: true, recurringInterval: pendingVoiceOrder.recurringInterval || 'weekly' })
+      };
+      
+      await addDoc(collection(db, 'orders'), orderData);
+      setPendingVoiceOrder(null);
+    } catch(err) {
+       handleFirestoreError(err, OperationType.CREATE, 'orders');
+    } finally {
       setLoading(false);
     }
   };
@@ -182,21 +227,58 @@ export default function ConsumerDashboard({ user, profile }: ConsumerDashboardPr
     } catch(err) {}
   };
 
+  const renderStatus = (status: string) => {
+    switch(status) {
+      case 'pending': return 'جاري البحث عن سائق';
+      case 'accepted': return 'تم قبول الطلب';
+      case 'en_route_pickup': return 'السائق في الطريق للمحطة';
+      case 'loading_water': return 'جاري تعبئة الوايت';
+      case 'delivering': return 'السائق في الطريق إليك';
+      case 'completed': return 'تم التوصيل';
+      case 'cancelled': return 'ملغي';
+      default: return status;
+    }
+  };
+
   return (
     <div className="space-y-6">
-      {/* Loyalty Header */}
-      <div className="flex items-center justify-between bg-white px-6 py-4 rounded-3xl border border-brand-border shadow-sm">
-        <div className="flex items-center gap-4">
-          <div className="w-12 h-12 bg-yellow-100 rounded-full flex items-center justify-center text-yellow-600">
-            <Award className="w-6 h-6" />
-          </div>
-          <div>
-            <p className="text-sm font-bold text-gray-500">حسابك في برنامج الولاء</p>
-            <p className="text-lg font-bold text-brand-primary">الفئة الذهبية • {profile.loyaltyPoints || 1200} نقطة</p>
+      <AnimatePresence>
+        {notification && (
+          <motion.div 
+            initial={{ opacity: 0, y: -50 }} 
+            animate={{ opacity: 1, y: 0 }} 
+            exit={{ opacity: 0, y: -50 }}
+            className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] bg-brand-secondary text-white px-6 py-3 rounded-2xl shadow-xl flex items-center gap-3 font-bold"
+          >
+            <Bell className="w-5 h-5 animate-bounce"/>
+            {notification}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Loyalty & Wallet Header */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="flex justify-between bg-white px-6 py-4 rounded-3xl border border-brand-border shadow-sm items-center">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 bg-yellow-100 rounded-full flex items-center justify-center text-yellow-600">
+              <Award className="w-6 h-6" />
+            </div>
+            <div>
+              <p className="text-sm font-bold text-gray-500">مستوى الولاء</p>
+              <p className="text-lg font-bold text-brand-primary">الفئة {profile.loyaltyTier || 'البرونزية'} • {profile.loyaltyPoints || 0} نقطة</p>
+            </div>
           </div>
         </div>
-        <div className="hidden md:block text-sm text-brand-muted">
-          خصم ١٠٪ على الطلبات المستعجلة
+        <div className="flex justify-between bg-white px-6 py-4 rounded-3xl border border-brand-border shadow-sm items-center">
+          <div className="flex items-center gap-4">
+             <div className="w-12 h-12 bg-brand-primary/10 rounded-full flex items-center justify-center text-brand-primary">
+              <Wallet className="w-6 h-6" />
+            </div>
+             <div>
+              <p className="text-sm font-bold text-gray-500">رصيد محفظة حوّل</p>
+              <p className="text-lg font-bold text-brand-primary">{profile.walletBalance || 0} ريال</p>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -223,6 +305,52 @@ export default function ConsumerDashboard({ user, profile }: ConsumerDashboardPr
         </motion.div>
       )}
 
+      {/* Confirmation Modal */}
+      <AnimatePresence>
+        {pendingVoiceOrder && (
+          <motion.div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="bg-white rounded-[32px] p-8 max-w-md w-full shadow-2xl">
+              <h2 className="text-xl font-bold mb-6 text-brand-primary border-b pb-4">تأكيد طلبك</h2>
+              
+              <div className="space-y-4 mb-8">
+                <div>
+                  <label className="text-xs font-bold text-gray-500 mb-1 block">موقعك (تم استخراجه)</label>
+                  <input type="text" value={pendingVoiceOrder.locationDescription || ''} onChange={(e) => setPendingVoiceOrder({...pendingVoiceOrder, locationDescription: e.target.value})} className="w-full bg-gray-50 border border-brand-border rounded-xl p-3 text-sm focus:outline-brand-primary" />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-gray-500 mb-1 block">الكمية (لتر)</label>
+                  <input type="number" value={pendingVoiceOrder.capacity || ''} onChange={(e) => setPendingVoiceOrder({...pendingVoiceOrder, capacity: e.target.value})} className="w-full bg-gray-50 border border-brand-border rounded-xl p-3 text-sm focus:outline-brand-primary" />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-gray-500 mb-1 block">طريقة الدفع</label>
+                  <select value={pendingVoiceOrder.paymentMethod} onChange={(e) => setPendingVoiceOrder({...pendingVoiceOrder, paymentMethod: e.target.value})} className="w-full bg-gray-50 border border-brand-border rounded-xl p-3 text-sm focus:outline-brand-primary">
+                    <option value="cash">كاش (عند الاستلام)</option>
+                    <option value="wallet">محفظة حوّل الدفع المباشر</option>
+                  </select>
+                </div>
+                <div className="flex gap-4 items-center">
+                  <div className="flex-1">
+                    <label className="text-xs font-bold text-gray-500 mb-1 block">وقت التوصيل (اختياري)</label>
+                    <input type="datetime-local" value={pendingVoiceOrder.scheduledAt} onChange={(e) => setPendingVoiceOrder({...pendingVoiceOrder, scheduledAt: e.target.value})} className="w-full bg-gray-50 border border-brand-border rounded-xl p-3 text-sm focus:outline-brand-primary" />
+                  </div>
+                </div>
+                <label className="flex items-center gap-2 mt-4 cursor-pointer">
+                  <input type="checkbox" checked={pendingVoiceOrder.isRecurring} onChange={(e) => setPendingVoiceOrder({...pendingVoiceOrder, isRecurring: e.target.checked})} className="rounded text-brand-primary w-4 h-4" />
+                  <span className="text-sm font-bold text-gray-700">تكرار الطلب (اشتراك أسبوعي)</span>
+                </label>
+              </div>
+
+              <div className="flex gap-4">
+                <button onClick={() => setPendingVoiceOrder(null)} className="flex-1 py-3 bg-gray-100 hover:bg-gray-200 text-gray-800 rounded-xl font-bold transition-colors">إلغاء</button>
+                <button onClick={submitOrder} disabled={loading} className="flex-[2] py-3 bg-brand-primary hover:bg-brand-primary/90 text-white rounded-xl font-bold transition-colors flex justify-center items-center gap-2">
+                  {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <><CheckCircle2 className="w-5 h-5" /> تأكيد الطلب</>}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Active Order with Details & Map */}
       <AnimatePresence>
         {activeOrder && (
@@ -247,6 +375,29 @@ export default function ConsumerDashboard({ user, profile }: ConsumerDashboardPr
                 {activeOrder.status !== 'pending' && <div className="absolute bottom-48 right-[20%] bg-white/90 px-2 py-1 rounded shadow-sm text-[10px] font-bold text-brand-secondary">السائق</div>}
               </div>
 
+               {/* Indicator based on detailed status */}
+              {activeOrder.status === 'en_route_pickup' && (
+                <div className="absolute top-6 left-6 right-6 flex gap-2">
+                  <div className="bg-white/95 p-3 rounded-2xl shadow-sm border border-brand-border flex items-center gap-3 w-full">
+                    <div className="bg-blue-100 text-blue-700 p-2 rounded-xl"><Navigation className="w-5 h-5"/></div>
+                    <div>
+                      <p className="font-bold text-sm">السائق في الطريق للمحطة</p>
+                      <p className="text-xs text-brand-muted">جاري التوجه لملئ الوايت بالماء</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+              {activeOrder.status === 'loading_water' && (
+                <div className="absolute top-6 left-6 right-6 flex gap-2">
+                   <div className="bg-white/95 p-3 rounded-2xl shadow-sm border border-brand-border flex items-center gap-3 w-full">
+                    <div className="bg-cyan-100 text-cyan-700 p-2 rounded-xl"><Droplets className="w-5 h-5 animate-pulse"/></div>
+                    <div>
+                      <p className="font-bold text-sm">السائق يعبئ الماء الان</p>
+                      <p className="text-xs text-brand-muted">تعبئة من {driverInfo?.waterSource || 'محطة العاصمة'}</p>
+                    </div>
+                  </div>
+                </div>
+              )}
               {activeOrder.status === 'delivering' && (
                 <div className="absolute top-6 left-6 right-6 flex gap-2">
                   <div className="bg-white/95 p-3 rounded-2xl shadow-sm border border-brand-border flex items-center gap-3 w-full">
@@ -266,7 +417,7 @@ export default function ConsumerDashboard({ user, profile }: ConsumerDashboardPr
                 <div className="flex justify-between items-start mb-4">
                   <div>
                     <span className="text-white/80 text-xs font-bold uppercase tracking-wider block mb-1">حالة الطلب</span>
-                    <h3 className="text-2xl font-bold">جاري {activeOrder.status === 'pending' ? 'البحث عن سائق' : activeOrder.status === 'accepted' ? 'تجهيز الوايت' : 'التوصيل'}</h3>
+                    <h3 className="text-xl font-bold">{renderStatus(activeOrder.status)}</h3>
                   </div>
                   <div className="bg-white/20 p-3 rounded-2xl">
                     {activeOrder.status === 'pending' ? <Clock className="animate-pulse" /> : <Droplets className="animate-bounce" />}
@@ -279,8 +430,8 @@ export default function ConsumerDashboard({ user, profile }: ConsumerDashboardPr
                     <span className="font-bold text-sm tracking-wide">{activeOrder.capacity} لتر</span>
                   </div>
                   <div className="bg-white/10 p-3 rounded-xl border border-white/5">
-                    <span className="text-[10px] text-white/60 block mb-1">التكلفة المتوقعة</span>
-                    <span className="font-bold text-sm">6,500 ريال</span>
+                    <span className="text-[10px] text-white/60 block mb-1">طريقة الدفع</span>
+                    <span className="font-bold text-sm">{activeOrder.paymentMethod === 'wallet' ? 'محفظة حوّل' : 'كاش'}</span>
                   </div>
                 </div>
 
@@ -298,8 +449,8 @@ export default function ConsumerDashboard({ user, profile }: ConsumerDashboardPr
                       {driverInfo.name.charAt(0)}
                     </div>
                     <div>
-                      <p className="font-bold text-sm">{driverInfo.name} <span className="text-yellow-500 ml-1">★ 4.9</span></p>
-                      <p className="text-xs text-brand-muted">رقم اللوحة: 1234/ب</p>
+                      <p className="font-bold text-sm">{driverInfo.name} <span className="text-yellow-500 ml-1">★ {driverInfo.rating || 'جديد'}</span></p>
+                      <p className="text-xs text-brand-muted">رقم اللوحة: 1234/ب | مبيعات: {driverInfo.completedOrdersCount || 0}</p>
                     </div>
                     <button onClick={() => setShowChat(!showChat)} className="mr-auto p-2 border-2 border-brand-border rounded-xl text-brand-primary">
                       <MessageSquare className="w-5 h-5"/>
@@ -330,22 +481,31 @@ export default function ConsumerDashboard({ user, profile }: ConsumerDashboardPr
       {/* Main Request Form (If No Active Order) */}
       {!activeOrder && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="bg-brand-primary p-8 rounded-[32px] text-white flex flex-col items-center justify-center text-center shadow-md min-h-[300px]">
+          <div className="bg-brand-primary p-8 rounded-[32px] text-white flex flex-col items-center justify-center text-center shadow-md min-h-[300px] relative overflow-hidden">
+             {loading && (
+              <div className="absolute inset-0 bg-brand-primary/80 backdrop-blur-sm z-10 flex flex-col items-center justify-center">
+                <Loader2 className="w-12 h-12 text-white animate-spin mb-4" />
+                <p className="font-bold">جاري تحليل الطلب بالذكاء الاصطناعي...</p>
+              </div>
+            )}
             <h2 className="text-2xl font-bold mb-2">اطلب وايت بصوتك</h2>
             <p className="text-sm text-white/70 mb-8">اضغط وتحدث، نحن نحدد موقعك وحاجتك تلقائياً</p>
             <button
               onClick={isRecording ? stopRecording : startRecording}
               disabled={loading}
-              className={`w-28 h-28 bg-white/20 rounded-full flex items-center justify-center border-4 border-white shadow-xl hover:bg-white/30 transition-all ${isRecording ? 'animate-pulse bg-red-500/80 border-red-200' : ''}`}
+              className={`w-28 h-28 bg-white/20 rounded-full flex items-center justify-center border-4 border-white shadow-xl hover:bg-white/30 transition-all ${isRecording ? 'animate-pulse bg-red-500/80 border-red-200 shadow-[0_0_40px_rgba(239,68,68,0.6)]' : ''}`}
             >
               <div className="w-20 h-20 bg-white rounded-full flex items-center justify-center shadow-inner">
-                {loading ? <Loader2 className="w-8 h-8 text-brand-primary animate-spin" /> : isRecording ? <Square className="w-8 h-8 text-red-500 fill-current" /> : <Mic className="w-8 h-8 text-brand-primary" />}
+                {isRecording ? <Square className="w-8 h-8 text-red-500 fill-current" /> : <Mic className="w-8 h-8 text-brand-primary" />}
               </div>
             </button>
-            <p className="mt-6 text-xs font-bold opacity-80 uppercase tracking-widest">{isRecording ? 'جاري الاستماع...' : loading ? 'جاري المعالجة...' : 'اضغط للتسجيل'}</p>
+            <p className="mt-6 text-xs font-bold opacity-80 uppercase tracking-widest">{isRecording ? 'جاري الاستماع...' : 'اضغط للتسجيل'}</p>
           </div>
 
           <div className="bg-white border border-brand-border rounded-[32px] p-6 flex flex-col justify-between">
+             <div className="mb-6 flex gap-2 overflow-x-auto pb-2">
+              <div className="bg-green-50 text-green-700 px-3 py-1 rounded-full text-xs font-bold whitespace-nowrap flex items-center gap-1"><Droplets className="w-3 h-3"/> {onlineDrivers.length} وايت متاح حالياً</div>
+            </div>
             <div>
               <h3 className="text-sm font-bold mb-4 flex items-center justify-between">
                 <span>خيارات سريعة</span>
@@ -361,7 +521,7 @@ export default function ConsumerDashboard({ user, profile }: ConsumerDashboardPr
                 </button>
                 <button className="bg-white border-2 border-brand-surface hover:border-brand-secondary p-4 rounded-2xl flex flex-col items-center gap-2 transition-colors col-span-2">
                   <span className="text-2xl">⚡</span>
-                  <span className="text-xs font-bold text-brand-secondary">طلب مستعجل (خصم ١٠٪)</span>
+                  <span className="text-xs font-bold text-brand-secondary">طلب مستعجل (خصم 10 نقاط ولاء)</span>
                 </button>
               </div>
             </div>
@@ -369,13 +529,13 @@ export default function ConsumerDashboard({ user, profile }: ConsumerDashboardPr
             <div className="mt-8 border-t border-brand-surface pt-4">
                <div className="bg-brand-surface p-4 rounded-2xl flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <Award className="w-5 h-5 text-brand-primary"/>
+                    <Calendar className="w-5 h-5 text-brand-primary"/>
                     <div>
                       <p className="text-xs font-bold">باقة البيت الدائم</p>
-                      <p className="text-[10px] text-gray-500">ميزة الجدولة التلقائية مفعلة</p>
+                      <p className="text-[10px] text-gray-500">الجدولة التلقائية معطلة</p>
                     </div>
                   </div>
-                  <button className="text-xs font-bold text-brand-primary">تعديل</button>
+                  <button className="text-xs font-bold text-brand-primary">تفعيل واشتراك</button>
                </div>
             </div>
           </div>
@@ -400,13 +560,14 @@ export default function ConsumerDashboard({ user, profile }: ConsumerDashboardPr
                   {order.status === 'completed' ? <CheckCircle2 className="w-5 h-5" /> : order.status === 'cancelled' ? <XCircle className="w-5 h-5" /> : <Clock className="w-5 h-5" />}
                 </div>
                 <div className="flex-1">
-                  <p className="text-xs font-bold">{order.status === 'completed' ? 'تم اكتمال التعبئة' : order.status === 'cancelled' ? 'تم الإلغاء' : 'طلب قيد التنفيذ'} - {order.capacity} لتر</p>
+                  <p className="text-xs font-bold">{renderStatus(order.status)} - {order.capacity} لتر</p>
                   <p className="text-[10px] text-brand-muted">
                     {order.createdAt ? new Date(order.createdAt.seconds * 1000).toLocaleString('ar-YE', { day: 'numeric', month: 'short', hour: '2-digit', minute:'2-digit' }) : ''} • {order.locationDescription}
                   </p>
                 </div>
                 <div className="text-left">
                   <p className="text-xs font-bold text-brand-text">6,500 ريال</p>
+                  <p className="text-[10px] text-brand-muted">{order.paymentMethod === 'wallet' ? 'محفظة' : 'كاش'}</p>
                 </div>
               </div>
             ))}
