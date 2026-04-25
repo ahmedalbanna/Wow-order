@@ -5,14 +5,18 @@
   --font-sans: "Inter", "Cairo", ui-sans-serif, system-ui, sans-serif;
   --font-display: "Cairo", "Inter", sans-serif;
 
-  --color-brand-primary: #D97706; /* Terracotta / Gold */
-  --color-brand-secondary: #0891B2; /* Water Turquoise */
-  --color-brand-bg: #FCF9F1; /* Warm Off-white */
+  --color-brand-primary: #2d7a8d;
+  --color-brand-secondary: #e67e22;
+  --color-brand-bg: #f8f5f0;
+  --color-brand-text: #3d3d3d;
+  --color-brand-muted: #8a8174;
+  --color-brand-border: #e2ddd3;
+  --color-brand-surface: #f1eee6;
 }
 
 @layer base {
   body {
-    @apply bg-brand-bg text-gray-900 font-sans;
+    @apply bg-brand-bg text-brand-text font-sans;
   }
 }
 

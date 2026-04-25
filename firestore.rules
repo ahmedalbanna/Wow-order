@@ -27,7 +27,9 @@ service cloud.firestore {
         && data.phone is string && data.phone.size() >= 9 && data.phone.size() <= 15
         && data.role in ['consumer', 'driver']
         && data.keys().hasAll(['uid', 'name', 'phone', 'role', 'createdAt'])
-        && data.keys().size() == 5;
+        && (!('loyaltyPoints' in data) || data.loyaltyPoints is number)
+        && (!('loyaltyTier' in data) || (data.loyaltyTier is string && data.loyaltyTier.size() <= 50))
+        && (!('isSubscribed' in data) || data.isSubscribed is bool);
     }
 
     function isValidDriver(data) {
@@ -37,7 +39,9 @@ service cloud.firestore {
         && data.isAvailable is bool
         && data.location is map
         && data.keys().hasAll(['uid', 'truckCapacity', 'waterSource', 'isAvailable', 'location', 'updatedAt'])
-        && data.keys().size() == 6;
+        && (!('waterQualityStatus' in data) || (data.waterQualityStatus is string && data.waterQualityStatus.size() <= 200))
+        && (!('rating' in data) || data.rating is number)
+        && (!('ratingCount' in data) || data.ratingCount is number);
     }
 
     function isValidOrder(data) {
@@ -46,6 +50,24 @@ service cloud.firestore {
         && data.createdAt == request.time
         && data.locationDescription is string && data.locationDescription.size() <= 1000
         && data.keys().hasAll(['orderId', 'consumerId', 'status', 'createdAt', 'locationDescription']);
+    }
+
+    function isValidMessage(data) {
+      return data.senderId == request.auth.uid
+        && data.text is string && data.text.size() > 0 && data.text.size() <= 1000
+        && data.createdAt == request.time
+        && data.keys().hasAll(['senderId', 'text', 'createdAt'])
+        && data.keys().size() == 3;
+    }
+
+    function isValidRating(data) {
+      return data.consumerId == request.auth.uid 
+        && data.driverId is string && data.driverId.size() > 0
+        && data.orderId is string && data.orderId.size() > 0
+        && data.rating is number && data.rating >= 1 && data.rating <= 5
+        && data.transcript is string && data.transcript.size() <= 2000
+        && data.createdAt == request.time
+        && data.keys().hasAll(['ratingId', 'consumerId', 'driverId', 'orderId', 'rating', 'transcript', 'createdAt']);
     }
 
     match /users/{userId} {
@@ -74,8 +96,20 @@ service cloud.firestore {
       allow update: if isSignedIn() && (
         (resource.data.consumerId == request.auth.uid && incoming().status == 'cancelled' && existing().status == 'pending' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])) ||
         (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'driver' && existing().status == 'pending' && (!('driverId' in existing()) || existing().driverId == null) && incoming().status == 'accepted' && incoming().driverId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'driverId', 'updatedAt'])) ||
-        (resource.data.driverId == request.auth.uid && incoming().status == 'completed' && existing().status == 'accepted' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']))
+        (resource.data.driverId == request.auth.uid && incoming().status == 'delivering' && existing().status == 'accepted' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])) ||
+        (resource.data.driverId == request.auth.uid && incoming().status == 'completed' && existing().status == 'delivering' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])) ||
+        (resource.data.consumerId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['hasRated']) && incoming().hasRated == true)
       );
+
+      match /messages/{messageId} {
+        allow read: if isSignedIn() && (get(/databases/$(database)/documents/orders/$(orderId)).data.consumerId == request.auth.uid || get(/databases/$(database)/documents/orders/$(orderId)).data.driverId == request.auth.uid);
+        allow create: if isSignedIn() && isValidId(messageId) && isValidMessage(incoming()) && (get(/databases/$(database)/documents/orders/$(orderId)).data.consumerId == request.auth.uid || get(/databases/$(database)/documents/orders/$(orderId)).data.driverId == request.auth.uid);
+      }
+    }
+
+    match /ratings/{ratingId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(ratingId) && isValidRating(incoming());
     }
   }
 }
