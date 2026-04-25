@@ -1,0 +1,14 @@
+{
+  "name": "طلبيّة واو",
+  "description": "منصة حجز وايتات المياه في اليمن - اطلب الماي لبيتك بضغطة زر أو برسالة صوتية.",
+  "requestFramePermissions": [
+    "microphone",
+    "geolocation"
+  ],
+  "majorCapabilities": [
+    "Voice-to-Order AI",
+    "Real-time Driver Matching",
+    "Water Quality Tracking",
+    "Digital Wallet Integration"
+  ]
+}

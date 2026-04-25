@@ -1,0 +1,92 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 3. Path Variable Hardening (Global Helpers)
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // --- Entity Validations ---
+
+    function isValidUser(data) {
+      return data.uid == request.auth.uid 
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 100
+        && data.phone is string && data.phone.size() >= 9 && data.phone.size() <= 15
+        && data.role in ['consumer', 'driver']
+        && data.keys().hasAll(['uid', 'name', 'phone', 'role', 'createdAt'])
+        && data.keys().size() == 5;
+    }
+
+    function isValidDriver(data) {
+      return data.uid == request.auth.uid
+        && data.truckCapacity is number && data.truckCapacity > 0
+        && data.waterSource is string && data.waterSource.size() <= 200
+        && data.isAvailable is bool
+        && data.location is map
+        && data.keys().hasAll(['uid', 'truckCapacity', 'waterSource', 'isAvailable', 'location', 'updatedAt'])
+        && data.keys().size() == 6;
+    }
+
+    function isValidOrder(data) {
+      return data.consumerId == request.auth.uid
+        && data.status == 'pending'
+        && data.createdAt == request.time
+        && data.locationDescription is string && data.locationDescription.size() <= 1000
+        && data.keys().hasAll(['orderId', 'consumerId', 'status', 'createdAt', 'locationDescription'])
+        // Optional fields check would be more complex, but we enforce strict creation
+        && data.keys().size() >= 5;
+    }
+
+    // --- Collection Rules ---
+
+    match /users/{userId} {
+      allow get: if isSignedIn();
+      allow list: if isSignedIn() && resource.data.uid == request.auth.uid;
+      allow create: if isSignedIn() && isValidId(userId) && userId == request.auth.uid && isValidUser(incoming());
+      allow update: if isSignedIn() && userId == request.auth.uid 
+        && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'phone', 'role'])
+        && isValidUser(incoming());
+    }
+
+    match /drivers/{driverId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(driverId) && driverId == request.auth.uid && isValidDriver(incoming());
+      allow update: if isSignedIn() && driverId == request.auth.uid
+        && incoming().diff(existing()).affectedKeys().hasOnly(['truckCapacity', 'waterSource', 'isAvailable', 'location', 'updatedAt'])
+        && isValidDriver(incoming());
+    }
+
+    match /orders/{orderId} {
+      allow get: if isSignedIn() && (resource.data.consumerId == request.auth.uid || resource.data.driverId == request.auth.uid);
+      allow list: if isSignedIn() && (resource.data.consumerId == request.auth.uid || resource.data.driverId == request.auth.uid || (resource.data.status == 'pending' && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'driver'));
+      
+      allow create: if isSignedIn() && isValidId(orderId) && isValidOrder(incoming());
+      
+      allow update: if isSignedIn() && (
+        // Consumer Actions: Cancel
+        (resource.data.consumerId == request.auth.uid && incoming().status == 'cancelled' && existing().status == 'pending' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])) ||
+        // Driver Actions: Accept
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'driver' && existing().status == 'pending' && incoming().status == 'accepted' && incoming().driverId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'driverId', 'updatedAt'])) ||
+        // Driver Actions: Complete
+        (resource.data.driverId == request.auth.uid && incoming().status == 'completed' && existing().status == 'accepted' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']))
+      );
+    }
+  }
+}

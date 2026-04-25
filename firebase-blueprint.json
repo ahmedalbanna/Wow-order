@@ -1,0 +1,70 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Base user profile for both consumers and drivers",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "role": { "type": "string", "enum": ["consumer", "driver"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "name", "phone", "role"]
+    },
+    "DriverProfile": {
+      "title": "Driver Profile",
+      "description": "Detailed information for water delivery drivers",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "truckCapacity": { "type": "number", "description": "Capacity in liters" },
+        "waterSource": { "type": "string" },
+        "isAvailable": { "type": "boolean" },
+        "rating": { "type": "number" },
+        "location": {
+          "type": "object",
+          "properties": {
+            "lat": { "type": "number" },
+            "lng": { "type": "number" }
+          }
+        },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "Order": {
+      "title": "Water Order",
+      "description": "A request for water delivery",
+      "type": "object",
+      "properties": {
+        "orderId": { "type": "string" },
+        "consumerId": { "type": "string" },
+        "driverId": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "accepted", "delivering", "completed", "cancelled"] },
+        "capacity": { "type": "number" },
+        "price": { "type": "number" },
+        "locationDescription": { "type": "string" },
+        "voiceOrderUrl": { "type": "string" },
+        "transcript": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["orderId", "consumerId", "status", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles"
+    },
+    "/drivers/{driverId}": {
+      "schema": "DriverProfile",
+      "description": "Driver specific data"
+    },
+    "/orders/{orderId}": {
+      "schema": "Order",
+      "description": "Water delivery orders"
+    }
+  }
+}
